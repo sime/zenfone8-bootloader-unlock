@@ -1,6 +1,6 @@
 # ZenFone 10 (ASUS_AI2302) — Unlocking it, with the ZF8 findings as reference
 
-**Date:** 2026-11-19 (updated same day after the ABL deep-dive)
+**Date:** 2026-11-19 (updated same day: ABL deep-dive, XBL unpack, padding audit)
 **Branch:** `zenfone10-portability`
 **Goal:** unlock the ZenFone 10 bootloader. The ZenFone 8 findings
 (`RESEARCH_HANDOFF.md` §12: `oem gen-random` → `flash asuskey2` →
@@ -9,13 +9,21 @@
 whether it (or anything else derivable locally) unlocks the ZF10
 (SM8550 / Snapdragon 8 Gen 2, `ASUS_AI2302`).
 
-Status: **ABL (fastboot app) reverse-engineered** — the answer is below in
-§5. The ZF8 recipe does **not** port; the ZF10 verifies an RSA-signed
-token. One concrete local-unlock lead survives (§5.6).
+Status: **answered — final** (2026-11-19). The ZF8 recipe does **not**
+port. The ZF10 gate is an RSA-signed token over the device's ISN,
+verified against an embedded AsusUnlock RSA-2048 **e = 3** key — and the
+one candidate weakness (low exponent + sloppy padding) is **disproven by
+byte-level audit** of the live verifier (§5.7): strict encode-then-compare,
+full deterministic 0xFF PKCS#1 v1.5 padding, full-buffer memcmp. **No
+local-unlock avenue survives**; unlocking requires a token signed with
+ASUS's private key (§5.6).
 
-Notation: **[F]** = fact verified against binaries (addresses are module
-VAs — module = `payload.bin[0xC8:]`, i.e. the `linuxloader10.efi` PE32
-app); **[I]** = inference.
+Notation: **[F]** = fact verified against binaries; **[I]** = inference.
+Coordinates: from §5.5 onward, addresses are **PE VAs** of
+`linuxloader10.efi` (MZ header at `payload.bin+0xb8`, ImageBase 0, file
+offset == VA). Sections before §5.5 and Appendix A use the older
+`payload.bin[0xC8:]`-module offsets, which equal **PE VA − 0x10**;
+Appendix A flags the re-verified rows.
 
 ---
 
@@ -58,7 +66,7 @@ All `dlcdnets.asus.com` direct links; sizes from HTTP headers.
 |---|---|---|---|
 | `UL-ASUS_AI2302-ASUS-34.1004.0204.65-1.1.4-2312-user.zip` | A14 `.65` | 4,019,139,403 | incremental (payload v2, 37 partitions) — **abl ships real content** (see §5.1) |
 | `UL-ASUS_AI2302-ASUS-33.0220.0220.52-1.1.4-2308-user.zip` | A13 `.52` | 3,944,738,911 | complete locally; launch-generation bootloader |
-| `UL-ASUS_AI2302-ASUS-35.0604.0404.65-1.1.4-2502-user.zip` | A15 `.65` | 4,427,590,121 | partial locally (3.1 GB), still yields `abl` + `vbmeta` (op data early in payload) |
+| `UL-ASUS_AI2302-ASUS-35.0604.0404.65-1.1.4-2502-user.zip` | A15 `.65` | 4,427,590,121 | local copy truncated at ~3.0 GiB (no EOCD); yields `abl`/`xbl`/`tz`/`vbmeta` only — `uefi` ops sit at ~0xd40f251a, past EOF (§5.8) |
 | `UL-ASUS_AI2302-ASUS-35.0604.0404.109-1.1.4-2506-user.zip` | A15 `.109` | 4,449,704,889 | Jun 2025 — not fetched |
 | `UL-ASUS_I006D-ASUS-33.0210.0210.296-1.1.26-2305-user.zip` | ZF8 control | 3,400,904,610 | ZF8 A13 full — "do 2023 ASUS bootloaders keep the protocol?" |
 
@@ -78,9 +86,10 @@ confirms).
    scan markers, compare algorithm. ✅ done (§5.4/§5.5).
 4. **Full RE of the ZF10 ABL auth path** — ✅ done (§5.5): find what the
    unlock gate actually verifies, byte-prove it.
-5. **Live-device validation** — only remaining gate; no ZF10 attached so far.
-6. **XBL unpack + `SecRSAVerifySig` padding audit** — new, the decisive step
-   for the one surviving local-unlock avenue (§5.6).
+5. **Live-device validation** — the remaining gate for any on-device claim;
+   no ZF10 attached so far, and no candidate survives to validate (§5.6).
+6. **XBL unpack + `SecRSAVerifySig` padding audit** — ✅ done (§5.7),
+   decisive: padding is strict, so the e = 3 forgery avenue is closed.
 
 ---
 
@@ -204,39 +213,66 @@ previous function's trailing `bl __stack_chk_fail`).
 
 ### 5.5 The ZF10 unlock gate: an RSA-signed token vs the device's ISN
 
-Established by full disassembly of the A13 `.52` ABL (**[F]** throughout;
-all addresses module VAs, `linuxloader10.efi = payload.bin[0xC8:]`):
+Established by full disassembly of the A13 `.52` ABL and cross-checked
+against a decompiler (Ghidra) model of the same PE. **[F]** throughout;
+addresses are **PE VAs** of `linuxloader10.efi` (see Notation).
 
 ```
-is_unlock(decrypt_type)                 fn 0x2d080   (frame 0x1d0)
-  ├─ buf            ← read_lock(ISN…)   fn 0x2c660(buf, 0x100)   @0x2d1d4
-  │    ("…lock(ISN=%a),size=%d", UFS/RPMB identity data via protocol
-  │     at GUID eb7a442a-cef4-40a7-a8ae-5a2e7f48e172)
-  ├─ handle         ← ImageFromPartition fn 0x1a000(&p, AT(0x15)) → 0x21ed0
-  │    (asuskey-partition image; fail prints "- read_asuskey fail")
-  └─ verify(p, 0x100, image, len, type)  fn 0x471b0 "AppMain (decrypt_type = %d): plain_text…"
-       └─ 0x46d70 "Verify : signature_len = %d, plain_text_len = %d"
-            ├─ gBS->LocateProtocol(cert-store GUID eb7a442a…)      @0x46e2c
-            ├─ select OEM cert by decrypt_type                    fn 0x45dc0
-            │     0 → 0x121438 len 0x3dd   ("RD"/bootloader-unlock)
-            │     1 → 0x121b4c len 0x361
-            │     2 → 0x121815 len 0x337
-            │     else → EFI_UNSUPPORTED
-            ├─ ASN1X509GetRSAFromCert (protocol +0x18 prep, +0x10 extract)
-            ├─ gBS->LocateProtocol(SecRSA GUID 5172ffb5-4253-7d51-c641-a701f973103c)
-            ├─ SecRSABigIntReadBin ×2 (key import; "for modulus failed!" @0xf6cf5)
-            └─ SecRSAVerifySig(ctx, 1, NULL, hash_id,
-                    signature, sig_len,      ← asuskey token image
-                    plain_text, plain_len)   ← ISN/lock data buffer
-                  hash_id: case3→1 (VB_SHA1, len=sig_len), case2→3
-                  (VB_SHA256, len 0x20); mode string @0xfbc49/f06c4
-                  result prints "SecRSAVerifySig() : PASS !!/FAIL !!" (0xf26cd/0xf0701)
+is_unlock(decrypt_type)                  fn 0x2d090   (frame 0x1d0)
+  │   (arg stored [sp,0x84])
+  ├─ isn_buf  ← read device identity      fn 0x1a010(&buf, 0x15) → 0x21ee0
+  │    prints "[ABL] +++ is_unlock(ISN=%a),size=%d"          @0x2d198
+  │    (string @0xec85d)
+  ├─ sig_buf[0x100] ← read_asuskey        fn 0x2c670(buf, 0x100)   @0x2d1e4
+  │    prints "[ABL] +++ read_asuskey(signature_len=%d)"     @0x102210
+  │    backend fn 0x11010 reads the token from a filesystem volume:
+  │      gBS(+0x138) = LocateHandleBuffer on
+  │      gEfiSimpleFileSystemProtocol 964e5b22-6459-11d2-8e39-00a0c969723b
+  │      (bytes @0x11fea8); "ExecImgFromVolume()" failure family;
+  │      per-call namespace GUID 30f09946-3dea-4b24-bea4-ca6ab64ebfde @0x103e40
+  └─ verify(sig, 0x100, plain, len, type) fn 0x471c0 "SecRSATestAppMain (decrypt_type = %d)"
+       └─ RsaVerify                        fn 0x46d80
+            │   "RsaVerify : signature_len = %d, plain_text_len = %d"
+            │   keytype := 3 (constant)    @0x46dd8
+            ├─ gBS->LocateProtocol(ASN1X509 408EC123-134E-4B80-9142-B89A0E08F8B3,
+            │     record @0x11ff88)        → iface
+            ├─ vb_read_oem_certificate(iface, out, decrypt_type)   fn 0x45dd0
+            │     0 → 0x121438 len 0x3dd / 1 → 0x121b4c 0x361 / 2 → 0x121815 0x337
+            │     (raw cert bytes via ASN1X509 iface +0x30)
+            ├─ ASN1X509 iface +0x18 GetRSAFromCert, +0x10 → (N, e)
+            └─ VerifySignature             fn 0x46010   @0x470a4
+                 ├─ keytype switch: 2 → hashid 3 (len 0x20, SHA-256);
+                 │     3 → hashid 1 (len = plain_len, RAW);
+                 │     else → EFI_UNSUPPORTED
+                 ├─ gBS->LocateProtocol(SecRSA EB7A442A-CEF4-40A7-A8AE-5A2E7F48E172,
+                 │     record @0x11ff98)   @0x4635c   → iface
+                 ├─ SecRSA iface +0x8 SecRSABigIntReadBin ×2 (import N, e)
+                 └─ SecRSA iface +0x10 SecRSAVerifySig(ctx, mode=1, NULL, hash_id,
+                        sig, 0x100, plain, plain_len)
 ```
 
-Verification maths runs in a **different bootloader stage** (protocol
-producers are not in the abl module: the GUIDs each appear exactly once,
-as LocateProtocol rodata; XBL image extracted — §5.7 — but its FVs are
-compressed, so the implementation is not yet sighted **[F/I]**).
+**Provenance correction (retraction).** The previous revision attributed
+the cert store to GUID `eb7a442a…` and SecRSA to `5172ffb5…`, and left the
+protocol wiring flagged as possibly "swapped/dead" pending XBL inspection.
+Both were one-record addressing slips on the `.data` GUID grid: the records
+are `0x11ff78` 51AA59DE…, `0x11ff88` **408EC123** (ASN1X509 — used by
+RsaVerify), `0x11ff98` **EB7A442A** (SecRSA — used by VerifySignature),
+`0x11ffa8` 5172FFB5… (EnvDxe — *not* SecRSA). Byte-verified by resolving
+each `gBS(+0x140)` Locate call (`0x11ff88` in fn 0x46d80; `0x11ff98` at
+0x4636c in fn 0x46010). The same wiring exists in the field-proven ZF8
+ABLs (§5.7), so the chain is live, not dead.
+
+Callers of `is_unlock` (both **[F]**):
+
+- the device-unlock flow (fn 0xcc0e0, "UNLOCK FAIL : %d") calls
+  `is_unlock(0)` at 0xe1358 — **cert type 0 = the AsusUnlock key (e = 3)**;
+- the guarded fastboot handler (`cmp w19,#3; b.lo` at 0xa7a3c; call at
+  0xa7a68) calls `is_unlock(w19)` with a runtime cert index 0–2 (its
+  source is a small getter, `bl 0x25ac`, masked to < 3);
+- a second `SecRSATestAppMain` caller exists (mega-fn 0x9e810, call site
+  0x9ff08): it builds a 19-byte plaintext from a request struct and passes
+  **decrypt_type 1 — the "Internet Widgits" dev cert** — so it is not the
+  unlock path.
 
 **The embedded certificates** (**[F]**, format: 8-byte prefix + custom
 mini-cert ASN.1: AlgId(sha256WithRSAEncryption) + issuer + validity +
@@ -255,7 +291,8 @@ to the asuskey2 struct additionally embeds two real X.509s (A13 VAs
 **CN=Timo / Timo_Xu@asus.com**, 2023-02-27, e=65537) — **[I]** likely the
 IMEI/watermark-token verification certs.
 
-**The fastboot surface of the unlock** (**[F]**, strings + call graph):
+**The fastboot surface of the unlock** (**[F]**, strings + call graph;
+addresses in this paragraph are `[0xC8]`-module offsets = PE VA − 0x10):
 
 - `oem asus-unlock` (entry `0xa3fc4`) is the renamed `cmd_oem_auth_hash`:
   it SafeString-stores the user argument into the auth-global page
@@ -279,57 +316,132 @@ IMEI/watermark-token verification certs.
 - Other ZF8-eq names: `oem hash_` (row `0xa5b30`) is a plain
   **state dumper** (prints `===`, `W_L/W_H`), not an auth-hash successor.
 
-**[I]** Reconstruction: the ZF10 unlock flow is
-`fastboot flash asuskey2 <ASUS-issued token for this device's ISN>` →
-`oem get-hwid` (or `flashing unlock`) → `is_unlock(0)` → RSA-verify the
-token against the *AsusUnlock* e=3 public key with the device's own
-lock/ISN data as the signed plaintext → DevInfo is unlocked. Exactly the
-shape of ASUS's official (app/repair-center-issued) unlock — matches the
-observed 2026 status quo of no free ZF10 unlock.
+**[I]** Reconstruction: the ZF10 unlock flow is an ASUS-issued token for
+this device's ISN (flashed via `fastboot flash asuskey2 …` and read back
+by `read_asuskey`), then a trigger (`oem get-hwid` / `flashing unlock`) →
+`is_unlock(0)` → RSA-verify the token against the *AsusUnlock* **e = 3**
+public key, with the device's own ISN as the signed plaintext (raw-mode
+PKCS#1 v1.5) → DevInfo is unlocked. Exactly the shape of ASUS's official
+(app / repair-centre-issued) unlock — matches the observed 2026 status quo
+of no free ZF10 unlock.
 
 ### 5.6 Verdict — fact vs inference
 
 - **[F]** The ZF8 symmetric recipe (`gen-random` → local MD5+MIX with
-  `"12345678"`/`"28825252"` → `auth-hash`) **cannot** unlock a ZF10:
-  the challenge/response compute does not exist in the ZF10 ABL; the key
+  `"12345678"`/`"28825252"` → `auth-hash`) **cannot** unlock a ZF10: the
+  challenge/response compute does not exist in the ZF10 ABL; the key
   strings are struct defaults; the MD5 library is dead code; `oem
   asus-unlock` verifies nothing by itself.
-- **[F]** The ZF10 checks an RSA signature (token in the asuskey
-  partition) over device-identity data, using certificates embedded in
-  the ABL, one of which (`AsusUnlock`) is the bootloader-unlock root.
-- **[I]** Therefore a local unlock requires either counterfeit
-  signatures (needs the ASUS private key — not derivable) **or** an
-  implementation weakness in the verification.
-- **[F→I lead]** The AsusUnlock key uses **e = 3**. Low-exponent RSA
-  with sloppy PKCS#1 v1.5 parsing is historically broken
-  (Bleichenbacher/Finney-style forgeries: a single crafted blob with the
-  right high bits can pass verifiers that don't check the full padding).
-  Whether this is exploitable on the ZF10 depends 100% on the padding
-  rigor of `SecRSAVerifySig`, which lives in XBL. This is the one
-  concrete local-unlock avenue — hypothesis until XBL is unpacked.
-- Live-device validation remains the final gate for any conclusion
-  about *the* device in hand (n=1 lessons).
+- **[F]** The ZF10 checks an RSA signature (token read via `read_asuskey`
+  from a filesystem volume) over the device's ISN, using certificates
+  embedded in the ABL; cert type 0 (`AsusUnlock`) is the bootloader-unlock
+  root.
+- **[I]** A local unlock therefore needs either counterfeit signatures
+  (the ASUS private key — not derivable) **or** an implementation weakness
+  in the verification.
+- **[F — lead closed]** The AsusUnlock key uses **e = 3**, but the padding
+  audit of the live verifier (§5.7) disproves the low-exponent avenue:
+  `SecRSAVerifySig` is invoked with mode 1 and keytype 3 → hashid 1 (raw),
+  and it is a strict encode-then-compare — it builds the complete
+  PKCS#1 v1.5 EM (full deterministic `0xFF` fill, minimum padding
+  enforced) and memcmps the **entire buffer** against the recovered
+  `s^e mod n`. Bleichenbacher-style e = 3 forgeries need a digest-only or
+  padding-lenient comparison; there is none here.
+- **Net verdict [F/I]:** no local-unlock avenue survives in the A13 `.52`
+  bootloader. Unlocking a ZF10 requires a token signed by ASUS's
+  AsusUnlock private key (official app / repair channel).
+- Live-device validation remains the final gate for any on-device
+  conclusion (n=1 lessons) — but there is no candidate left to validate.
 
-### 5.7 Next steps
+### 5.7 XBL DXE core: protocol providers and the `SecRSAVerifySig` padding audit
 
-1. **Unpack XBL** (Qualcomm MBN ELF, compressed FV segments; A13 `.52`
-   XBL extracted: sha256 `3fecd40289f004ceef2e63a593c532dcf1bf953d2d3039eaab10c94df986d614`,
-   1,212,416 bytes; xbl_config `9e8468c4…`; xbl_ramdump `a5a18e36…`).
-   Find the protocol producers (GUIDs `eb7a442a…` cert-store,
-   `5172ffb5…` SecRSA) and audit `SecRSAVerifySig`'s PKCS#1 v1.5 checks
-   against the e=3 key. This decides the only surviving local avenue.
-2. Complete the command map: exact `flashing unlock` handler flow
-   (0x9c4xx subdispatch → DevInfo write), how `decrypt_type` is selected
-   in `oem get-hwid` (`w19` provenance), the two `.data` X.509s' role.
-3. Optionally confirm the token format from an officially unlocked ZF10
-   (asuskey2 partition dump would give a ground-truth token to test the
-   padding hypothesis against — non-destructive via GhostLock remote
-   dumps only).
-4. Live test once 1–2 give a concrete candidate.
+**[F]** The four GUIDs are served by DXE drivers that live in XBL, not in
+the ABL. Both the ZF10 A13 `.52` XBL and — as the control — the ZF8 XBL
+were unpacked (`xbl` ELF → outer FV → **gzip**-wrapped GUID-defined
+section files; *not* LZMA), and the protocol-installation graph was read
+from `InstallMultipleProtocolInterfaces` sites (a `ldr xN,[gBS+0x148];
+br xN` tail-thunk pattern — an earlier census missed these). Provider map
+(identical for ZF10 `.52` and ZF8):
+
+| GUID | provider | iface slots | role |
+|---|---|---|---|
+| `408EC123-134E-4B80-9142-B89A0E08F8B3` | ASN1X509Dxe | 7 | cert bytes, `GetRSAFromCert`, RSA params |
+| `EB7A442A-CEF4-40A7-A8AE-5A2E7F48E172` | SecRSADxe | 2 crypto | +0x8 `BigIntReadBin`, +0x10 `SecRSAVerifySig` |
+| `5172FFB5-4253-7D51-C641-A701F973103C` | EnvDxe | 6 | trivial getters (constants/defaults) |
+| `8E5E…` | VerifiedBootDxe | 9 | facade brokering ASN1X509 |
+| `55B1D734…` | UCDxe | — | irrelevant to this path |
+| `51AA59DE…` | — | — | referenced by the ABL, not installed in scope |
+
+**[F]** The ZF8 census is structurally identical (same providers, same
+2-slot SecRSA, same trivial 5172 getters). ZF8 unlock works in the field
+with this exact wiring, which rules out any "dead code / swapped provider"
+reading of the ZF10 wiring.
+
+**The audit (SecRSADxe, all **[F]**).** The ABL-side call resolves to:
+
+- iface slot +0x8 = fn `0x14e4` → `bl 0x15b0` (`BigIntReadBin`; returns
+  `0x50`, or 0 on failure) — imports N and e from the ASN1X509 key;
+- iface slot +0x10 = fn `0x1518` → argument shuffle → **`bl 0x1670`** —
+  the verify core, i.e. `SecRSAVerifySig` *is* 0x1670 (byte-linked, no
+  ambiguity).
+
+`0x1670` performs:
+
+1. `s^e mod n` via fn 0x1e9c into a fresh buffer (0x1738), with an **exact
+   length** requirement (0x1740–0x1748).
+2. For **mode 1** (the mode the unlock chain passes): build the complete
+   expected EM via fn 0x1840 (0x1784) and compare the whole buffer with
+   fn 0x2094 (0x17a8); any difference yields error 0x1000.
+3. For mode ≠ 1: fn 0x19f8 (hash index 0–7) — not used by the unlock path.
+
+`0x1840` is a strict PKCS#1 v1.5 signature encoder, byte-verified at
+0x1940–0x19c0: `EM[0]=00, EM[1]=01, memset(EM+2, 0xFF, k−3−t−m), 00,
+[DigestInfo prefix (hash table stride 0xc0, prefix at entry+0x98)], msg`.
+It enforces minimum padding (error 0x1004 when `k < t+11` or
+`k−11−t < m`). There is no branch that skips or randomises the `0xFF`
+fill and no "look only at the digest" comparison. Hash-table indices
+(SecRSADxe rodata @file 0x6198): **1 = raw** (digest_len 0, no
+DigestInfo), 2 = SHA-1 (OIW OID), 3 = SHA-256, 4 = SHA-224, 5 = SHA-384,
+6 = SHA-512.
+
+**Why e = 3 does not help [F].** The classic low-exponent forgery
+(Bleichenbacher '06 / Finney) requires the verifier to accept an `s^e mod n`
+whose high bits match a loosely-specified encoding while padding and
+trailing bytes stay attacker-controlled — feasible because `s^3` can be
+made congruent to such an encoding with a short cube-root search. Here the
+encoding is fully specified and deterministic (`00 01 FF…FF 00 ||
+plaintext`, ~234 forced `0xFF` bytes at the usual ISN lengths) and compared
+in full. A forgery would need an integer `s` with `s^3 ≡ EM (mod n)`
+*exactly* over a 2048-bit modulus — the cube-root gap is astronomically
+larger than any fix-up an attacker can supply.
+
+**Verdict: the AsusUnlock e = 3 key is not exploitable via
+`SecRSAVerifySig`. The last local-unlock avenue is closed.**
+
+### 5.8 Next steps
+
+The decisive question is answered (§5.6/§5.7): there is no local weakness
+to weaponise. What remains is optional confirmation, not a path to unlock:
+
+1. **Ground-truth token** from an officially unlocked ZF10 (`asuskey2`
+   dump, non-destructive via GhostLock remote dumps only) — would confirm
+   the reconstruction (raw-mode PKCS#1 v1.5 signature over the ISN-derived
+   plaintext) but cannot produce a forgery.
+2. **`.52 → .65` wiring diff** — blocked: the A15 `.65` OTA download is
+   truncated at ~3.0 GiB while the `uefi` partition ops start at
+   ~0xd40f251a, past EOF. Re-download the full 4.4 GB zip to compare
+   (expected: no semantic change).
+3. **Remaining ZF10 ABL corners** (none plausibly change the verdict): the
+   `flashing unlock` → DevInfo write path, the RD/WM/xts token helpers
+   (`verify_RD_unlock`, WaterMask), and the two `.data` X.509s (CN=Timo).
+4. **Live validation** only if a candidate ever appears; none does.
 
 ---
 
-## Appendix A — ZF10 A13 `.52` anchor table (module VAs)
+## Appendix A — ZF10 A13 `.52` anchor table
+
+Coordinates: `[0xC8]`-module VAs (`payload.bin[0xC8:]`); **PE VA = +0x10**.
+Rows marked ↦ were re-derived this revision and are given in **PE VA**.
 
 | What | Where |
 |---|---|
@@ -338,14 +450,14 @@ observed 2026 status quo of no free ZF10 unlock.
 | `oem asus-unlock` (cmd_oem_auth_hash setter) | entry `0xa3fc4` (row fn `0xa3fd4`) |
 | `oem get-hwid` (token-verify driver) | entry `0xa45bc` (row fn `0xa45cc`); token prints `0xa3714`, `0xa4734`, `0xa48cc` |
 | `verify_RD_unlock` / RD token strings | `0xaf51c`; success print `0xaf7cc` |
-| is_unlock | `0x2d080` (read_lock caller), typography `0xf1649` read_asuskey, `0xe3257` Verify PASS, `0x100074` Verify FAIL |
-| read_lock(ISN) helper | `0x2c660` (RPC/UFS protocol `0x11000`, GUID-ish parse) |
+| is_unlock ↦ | PE VA `0x2d090` (frame 0x1d0, arg @`[sp,0x84]`); ISN identity `0x1a010`+`0x21ee0`; token `0x2c670`; verify `0x471c0`→`0x46d80`→`0x46010` |
+| read_asuskey (token) ↦ | PE VA `0x2c670`; backend volume reader PE VA `0x11010` (LocateHandleBuffer on gEfiSimpleFileSystemProtocol); namespace GUID `30f09946…` @PE `0x103e40` |
 | ImageFromPartition wrapper | `0x21ed0` (label string in-module); partition handle via `0x1a000(&p, 0x15)` |
-| verify AppMain / decrypt core | `0x471b0` → `0x46d70` → `0x46000` |
-| cert selection | `0x45dc0` (type→blob map: 0/1/2 → `0x121438`/`0x121b4c`/`0x121815`) |
-| SecRSAVerifySig call | `0x465a4` (protocol slot +0x10 of GUID `5172ffb5…`) |
-| hash modes | case3 → id 1 (SHA-1), case2 → id 3 "VB_SHA256" (strings `0xfbc49`, `0xf06c4`) |
-| embedded unlock cert (type 0) | `0x121438` len `0x3dd`, RSA-2048 e=3, sha256(n) `cda39824…` |
+| verify AppMain / decrypt / verify ↦ | PE VA `0x471c0` → RsaVerify PE `0x46d80` (keytype = 3 @`0x46dd8`) → VerifySignature PE `0x46010` |
+| cert selection ↦ | PE VA `0x45dd0` (type→blob map: 0/1/2 → `0x121438`/`0x121b4c`/`0x121815`) |
+| SecRSAVerifySig ↦ | ABL slot +0x10 of **EB7A442A** (record @PE `0x11ff98`, Locate @`0x4636c`); provider body PE VA `0x1518`→`0x1670` |
+| hash modes ↦ | PE VA `0x46010` switch: keytype 3 → hashid 1 = **raw** (len = plain_len); 2 → hashid 3 = SHA-256 (len 0x20); else EFI_UNSUPPORTED. Table: idx 1 raw / 2 SHA-1 / 3 SHA-256 / 4 SHA-224 / 5 SHA-384 / 6 SHA-512 |
+| embedded unlock cert (type 0) ↦ | PE VA `0x121438` len `0x3dd`, RSA-2048 e=3, sha256(n) `cda39824…` (byte-verified via `openssl x509 -inform DER`) |
 | asuskey2 struct / key defaults | `0x2b2348`-`0x2b2366` (keylen 0x40 slot at `0x2b234c`, keys `0x2b2354`/`0x2b235d`) |
 | asuskey2 flash handler writes | `0x9f238`-`0xa13c4` region; `receive asuskey2 data` `0xefc32`-family |
 | .data X.509s (ASUS CN=Timo etc.) | `0x2b2412`, `0x2b27ea` (A13; A14 +0x10) |
@@ -360,9 +472,30 @@ DevInfo `0x1fe328` (+0xc guard, +0x10 authorized, +0x82 random,
 +0x3b4/+0x3c4 buffers), `Authorized Result : PASS` `0x4e13c`. All
 verified by live emulation (`work/emu.py`, `work/asusauth.py`).
 
+## Appendix C — ZF8 cross-check (control) and XBL carve recipe
+
+**[F]** ZF8 A13 `.296` ABL: `is_unlock` @`0x2f910`; one giant
+`SecRSATestAppMain` region `0x3a458`–`0x3d4b8` (it contains per-app
+sub-prologues, so a naive "stp x29,x30,[sp,#-N]" walk sees one symbol);
+GUID records `0x1dd424` 51AA / `0x1dd434` 408EC / `0x1dd444` EB7A /
+`0x1dd454` 5172, each preceded by a 4-byte prefix (real GUID at +4);
+5172-Locate failure prints "…rifySignature: LocateProtocol failed".
+
+**[F]** ZF8 XBL carve: ELF64LE, outer FV at PH8 (file `0x8c000`,
+`8C8CE578…`); inside are GUID-defined-section files whose 24-byte headers
+end in a raw **gzip** stream (not LZMA) → inner FVs. The ZF8 DXE census
+matches the ZF10 `.52` provider map exactly (§5.7).
+
+**[F]** ZF10 `.52` XBL: sha256
+`3fecd40289f004ceef2e63a593c532dcf1bf953d2d3039eaab10c94df986d614`
+(1,212,416 bytes); recipe identical (ELF PH8 → outer FV → GUID-defined
+gzip sections → inner FVs).
+
 ## Provenance
 
-Primary research: models GLM 5.3 (analysis) — all **[F]** items were
-established by direct disassembly/hash verification recorded in the
-session logs on this branch. No claims above rest on forum sources; those
-appear only in §1 priors.
+Primary research: models GLM 5.3 / DeepSeek V4.1 Flash (analysis) — all
+**[F]** items were established by direct disassembly/hash verification
+and, from §5.5/§5.7, by decompiler output (Ghidra-backed REA:
+`analyze_function` pseudocode + native value-flow) recorded in the session
+logs on this branch. No claims above rest on forum sources; those appear
+only in §1 priors.
