@@ -440,8 +440,9 @@ the manifest sha256 (`7a0a75b1…fa41a`, 4,333,568 bytes) — so the truncated
 local download is no longer a blocker. Carving it the same way yields
 `SecRSADxe` and `ASN1X509Dxe` **byte-identical to `.52`** (module sha256
 `5b5b6097…` / `bccd2250…`, both found verbatim in the `.65` FV), i.e. the
-strict verifier (0x1670/0x1840) is unchanged. The A14 `.65` ABL likewise
-reproduces the `.52` chain (keytype constant @`0x46e88`; Locate ASN1X509
+strict verifier (0x1670/0x1840) is unchanged. The A14 `.65` `uefi`
+partition (sha256 `3add6489…`) carries the identical modules too. The A14
+`.65` ABL likewise reproduces the `.52` chain (keytype constant @`0x46e88`; Locate ASN1X509
 @`0x46efc` → record `0x120968`; Locate SecRSA @`0x4641c` → record
 `0x120978`; gBS via global `+0xa8`, was `+0x98`). The verdict therefore
 holds for every inspected build, not by inference.
