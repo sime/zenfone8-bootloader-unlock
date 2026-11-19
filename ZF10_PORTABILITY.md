@@ -112,6 +112,12 @@ confirms).
   from the remote zip head and downloads only the requested partition's
   op blobs (used in §5.7 to recover the A15 `.65` `uefi` partition from
   the truncated local zip; reproduces sha256 `7a0a75b1…`).
+- `work/verify_token.py` — offline `asuskey2` token verifier: embeds the
+  AsusUnlock RSA-2048 e = 3 public key (sha256(n) `49b95060…`) and
+  mirrors SecRSADxe's strict raw-mode EM check exactly; recovers the
+  plaintext a token commits to (`--explore` scans a whole dump).
+  Self-tested against a synthetic e = 3 key; see
+  `ZF10_GROUNDTRUTH_RUNBOOK.md`.
 
 Bl/imm decoding note (applies to all scanners here): `BL` iff `(w>>26)&0x3F
 == 0x25`, `B` iff `0x05`; `imm26 = w & 0x3FFFFFF` with bit-25 sign. An
@@ -455,10 +461,12 @@ holds for every inspected build, not by inference.
 The decisive question is answered (§5.6/§5.7): there is no local weakness
 to weaponise. What remains is optional confirmation, not a path to unlock:
 
-1. **Ground-truth token** from an officially unlocked ZF10 (`asuskey2`
-   dump, non-destructive via GhostLock remote dumps only) — would confirm
-   the reconstruction (raw-mode PKCS#1 v1.5 signature over the ISN-derived
-   plaintext) but cannot produce a forgery.
+1. **Ground-truth token** from an officially unlocked ZF10 — scoped in
+   `ZF10_GROUNDTRUTH_RUNBOOK.md` (dump list, ISN acquisition, outcome
+   matrix; offline verifier `work/verify_token.py` is written and
+   self-tested). Non-destructive via GhostLock remote dumps only; it
+   would confirm the reconstruction (raw-mode PKCS#1 v1.5 signature over
+   the ISN-derived plaintext) but cannot produce a forgery.
 2. **`.52 → .65` wiring diff** — ✅ done (§5.7): the A15 `.65` `uefi`
    partition was recovered by CDN range-fetch and its verifier modules are
    byte-identical to `.52`. No re-download needed.
