@@ -106,6 +106,12 @@ confirms).
 - `work/payload_manifest.py` — A/B OTA manifest parser (empirically
   re-verified schema, see §5.2) with `extract_op_bytes` for XZ ops;
   works against partial OTA files/HTTP ranges.
+- `work/extract_part.py` — extract one partition from a local OTA
+  `payload.bin` (multi-stream XZ → hash-checked image).
+- `work/fetch_part.py` — same, but over HTTP `Range`: reads the manifest
+  from the remote zip head and downloads only the requested partition's
+  op blobs (used in §5.7 to recover the A15 `.65` `uefi` partition from
+  the truncated local zip; reproduces sha256 `7a0a75b1…`).
 
 Bl/imm decoding note (applies to all scanners here): `BL` iff `(w>>26)&0x3F
 == 0x25`, `B` iff `0x05`; `imm26 = w & 0x3FFFFFF` with bit-25 sign. An
