@@ -424,6 +424,18 @@ unconditionally at `0x46528` and loaded into `w2` for the iface+0x10 call
 at `0x4658c`; the digest-comparison branch (fn 0x19f8) is unreachable from
 the ABL.
 
+**`.65` builds [F/I].** The A14 `.65` ABL reproduces the `.52` chain:
+structurally identical, differing only in shifted offsets and a relocated
+gBS global (`+0xa8`, was `+0x98`). The keytype constant
+`mov w8,#3; str w8,[sp,#0x24]` sits at `0x46e88` (+0xB0 from `.52`);
+Locate ASN1X509 @`0x46efc` (record @`0x120968`) and Locate SecRSA
+@`0x4641c` (record @`0x120978`; the two records are consecutive 16-byte
+entries, as in `.52`). The A14 `.65` XBL body is an MBN ELF32 container
+whose DXE FVs are **not** recoverable with the current recipe (no raw
+`_FVH`, no gzip/xz/LZMA stream), and the A15 `.65` `uefi` ops lie past the
+truncated OTA (§5.8) — so for `.65` the verifier strength is *inferred*
+from the unchanged ABL chain plus the shared XBL lineage, not re-decompiled.
+
 **Verdict: the AsusUnlock e = 3 key is not exploitable via
 `SecRSAVerifySig`. The last local-unlock avenue is closed.**
 
