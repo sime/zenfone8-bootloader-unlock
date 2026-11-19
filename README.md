@@ -218,7 +218,8 @@ A protocol that resists look-ahead bias — ask the model to commit before it
 sees the answers:
 
 1. **Before it sees `asusauth.py` or the known answer:** give it handoff §12.2
-   (the algorithm description: MD5 nested, keys, MIX1/MIX2 byte-mangling) and
+   (the algorithm description: single MD5 over challenge‖key, then the
+   MIX1/MIX2 byte-mangling transform) and
    ask it to independently implement the calculation and predict the response
    for challenge `98a80c…eb7`. Compare against the vector above. If its output
    differs by even one character, the discrepancy is finding #1.

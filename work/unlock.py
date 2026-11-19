@@ -5,7 +5,7 @@ protocol in ABL (Android 12, abl matches raw/abl.elf).
 
 Protocol (reverse-engineered + LIVE-VERIFIED, see RESEARCH_HANDOFF.md §12/§12.9):
   1. fastboot oem gen-random   -> prints "Random Num = <32 hex>"  (challenge)
-  2. response = transform(md5hex(md5(challenge + "12345678")))     (64 chars)
+  2. response = transform(md5(challenge + "12345678").hexdigest()) (64 chars)
   3. fastboot flash asuskey2 <64-byte response>                   (RAM stash)
   4. fastboot oem auth-hash   -> compares; PASS sets+persists is_authorized_1
   5. fastboot flashing unlock -> DevInfo.is_unlocked=1 (DESTRUCTIVE: may wipe

@@ -3,7 +3,7 @@
 Standalone implementation of the ASUS ABL factory unlock response
 (auth-hash family), derived from abl_linuxloader.efi static analysis:
 
-  response = transform(md5hex(md5(challenge || key)))
+  response = transform(md5hex(challenge || key))
 
   transform (FUN_00046608, key_select=1): two 16-char blocks; each block has
   two 8-char groups; chunks are 2 ASCII chars read as LE u16; group 1 mixes
