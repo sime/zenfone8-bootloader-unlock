@@ -415,6 +415,15 @@ in full. A forgery would need an integer `s` with `s^3 ≡ EM (mod n)`
 *exactly* over a 2048-bit modulus — the cube-root gap is astronomically
 larger than any fix-up an attacker can supply.
 
+**[F] There is exactly one ABL verify path, and its mode is fixed.** The
+ABL resolves the SecRSA GUID exactly once (Locate @`0x4636c`, inside
+VerifySignature) and the ASN1X509 GUID exactly once (Locate @`0x46e4c`,
+inside RsaVerify) — so there is no second, laxer verifier elsewhere in the
+ABL. The mode argument to SecRSAVerifySig is the constant 1, set
+unconditionally at `0x46528` and loaded into `w2` for the iface+0x10 call
+at `0x4658c`; the digest-comparison branch (fn 0x19f8) is unreachable from
+the ABL.
+
 **Verdict: the AsusUnlock e = 3 key is not exploitable via
 `SecRSAVerifySig`. The last local-unlock avenue is closed.**
 
