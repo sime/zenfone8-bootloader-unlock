@@ -219,13 +219,18 @@ keylen slot `0x40`, `receive asuskey2 data`, `asus.authorized`.
   `0xa0694-0xa0a0`); one runtime integrity check (`ldp/cmp/str -1`) at
   `0xa0410`. **[I]** They are initial/scratch values, not live secrets.
 
-**[F]** ZF10 fastboot dispatch table (rows 16 bytes: `fn@+0, name@+8`,
-base `0x1063a0`): every listed handler name is a *tail-shared pool
-pointer* (e.g. `' asus-lock' @0xa3a64`, `'oem asus-unlock' @0xa3fd4`,
-`'oem get-hwid' @0xa45cc`, `' hash_' = "oem hash_"`, `' asus-unlock'`,
-`' em get-imeiauth'`). True entry = stored `fn − 0x10` (the stored pointer
-skips the stack-cookie prologue; handlers begin at `sub sp, …` after the
-previous function's trailing `bl __stack_chk_fail`).
+**[F]** ZF10 fastboot command table: 100 records × 16 B at PE `0x1062d8`,
+each `{const char* name; fn}` (name@+0, fn@+8), consumed by the
+registration loop at `0x9d994` (`adrp/add` base `0x1062c8`; `ldp x0,x1,[rec]`
+→ `bl 0x9dcec`). Name pointers are *tail-shared* into a string pool, so
+several point mid-string (e.g. `' asus-lock'`, `' asus-unlock'`). The mapped
+handlers are in §5.8 (`flashing unlock` = `0xa1dc4`, `oem asus-wm-unlock` =
+`0xa4a40`, `oem xts-unlock` = `0xab818`). *(Correction: an earlier revision
+read these records 8 bytes out of phase as `{fn,name}` at base `0x1063a0` and
+therefore concluded "true entry = stored `fn − 0x10`" — both are artifacts.
+The stored `fn` **is** the entry; handlers begin at their `sub sp, …` prologue,
+right after the previous function's trailing `bl __stack_chk_fail`, with no
+prefix. §5.4's and §5.5's handler/name pairings are superseded by §5.8.)*
 
 ### 5.5 The ZF10 unlock gate: an RSA-signed token vs the device's ISN
 
@@ -587,10 +592,79 @@ byte-layout that `0xaf530`/`is_unlock` verify; (c) the runtime value of
 `SecurityFlag`. None is expected to change the verdict; each is a concrete
 dump target.
 
-### 5.9 Next steps
+### 5.9 Downgrade surface (Avenue 4: launch builds + rollback)
 
-The decisive question is answered (§5.6/§5.7): there is no local weakness
-to weaponise. What remains is optional confirmation, not a path to unlock:
+**[F] No weaker build is obtainable.** Re-checked the ASUS CDN (2026-11-19):
+the ZF10 launch builds `33.0220.0220.10`/`.17`, the mid A13 `.101`, and the
+latest A15 `.140` all return **404**; the only A13 ZF10 build served is
+`33.0220.0220.52` (Aug 2023). `.52` is already the RSA-token generation and
+carries no live symmetric auth (the ZF8 MD5/MIX is dead code, §5.4). So there
+is no *older/weaker* ZF10 bootloader to downgrade to — the "downgrade to a
+pre-token build" premise has no target. *(A hypothetical pre-`.52` build such
+as `.10`/`.17` cannot be obtained or inspected; this is an unresolvable gap,
+not a lead.)*
+
+**[F] AVB-level anti-rollback is not engaged.** The top-level `vbmeta` (A13
+`.52`, A14 `.65`) is `libavb 1.0` / `avbtool 1.2.0`, `algorithm 2`, with
+`rollback_index = 0` and only `com.android.build.boot.*` PROPERTY
+descriptors (no `HASHTREE`/`CHAIN_PARTITION` rollback descriptors). Android
+Verified Boot itself does not pin a rollback version here.
+
+**[F] Qualcomm anti-rollback *is* implemented in XBL.** The ZF10 XBL carries
+the literal path `/sources/services/antirollback/src/AntiRollbackMgr.cpp` —
+the standard Qualcomm Anti-Rollback Manager (fuse-backed). Any enforced
+downgrade floor lives there, not in vbmeta. **[I]** whether the
+anti-rollback fuse is provisioned on a given retail unit is a live question.
+
+**Net: the downgrade avenue is closed** — there is no older build with a
+weaker gate to reach, AVB does not lower the bar, and XBL's AntiRollbackMgr
+is the enforcement point.
+
+### 5.10 EDL / firehose feasibility (Avenue 2 — recon only, no device action)
+
+**[F] Platform.** SoC is **SM8550** (Snapdragon 8 Gen 2), Qualcomm internal
+name **kalama**; the ZF10 platform variant is **kailua** (XBL:
+`…/mproc/glink/config/kailua/xport_qmp_config_tme.c`; xbl_config:
+`pre-ddr-soc-kailua-1.0.dtb`; ABL: `001-AB-SM8550_ES1`).
+
+**[F] EDL/FEDL is present and user-reachable.** XBL carries the download
+path (`boot_fedl_check`, `boot_dload_handle_force`, `edl: sbl1_dl`,
+`skip_ddr_init_in_EDL`, `sbl1_hw_pre_ddr_init`); xbl_config carries
+`forced_download`, `fedl_timeout` and the pre-DDR SoC DTB. The ABL exposes
+`oem enter-dload` (handler `0xa74b4`) which sets the download cookie
+(`DloadCookieAddr/Value` in `uefiplat.cfg`). So *entering* EDL is not the
+obstacle.
+
+**[F] Secure boot is on, and the fuse state is queried.** The whole boot
+chain is ASUS-signed (ABL and `uefi` are signed containers, vbmeta is AVB),
+and the ABL reads the Qualcomm fuses for `oem check-fuse` / `oem fuse-info`:
+`Bit#0_SECBOOT_FUSE = %x (must be 0)` and
+`Bit#6 DEBUG_RE_ENABLED_FUSE = %x (must be 1)`.
+
+**[I] Consequence — authenticated firehose.** On a fused SM8550 in
+secure-boot mode the PBL authenticates the Sahara/firehose programmer
+(`prog_firehose_ddr.elf`) against the OEM key hash in the fuse; an arbitrary
+or unsigned programmer is rejected. No ASUS programmer ships in the OTA
+(none appears in any extracted image), and none is obtainable.
+
+**[F] EDL would not be a bypass even with a programmer.** Every target of an
+EDL write is already signature-protected at its point of use: `abl`/`xbl`
+are signed containers verified upstream, the `uefi` partition carries its own
+ASUS X.509 signature (§5.8), a forged `devinfo` unlock byte is ignored
+because device-state I/O is routed to the keymaster TA (§5.8), and `vbmeta`
+is AVB-signed. So EDL is blocked at three independent layers: authenticated
+firehose → signed boot partitions → TA-backed state.
+
+**Net: EDL is not a feasible unlock route.** No on-device action is
+warranted; this section is a firmware-only feasibility result.
+
+### 5.11 Next steps
+
+The decisive question is answered (§5.6–§5.10): **all four pursued avenues**
+(unlock-state store §5.8, sibling gates §5.8, downgrade surface §5.9, EDL
+§5.10) plus the DXE verifier audit (§5.7) are closed — there is no local
+weakness to weaponise. What remains is optional confirmation, not a path to
+unlock:
 
 1. **Ground-truth token** from an officially unlocked ZF10 — scoped in
    `ZF10_GROUNDTRUTH_RUNBOOK.md` (dump list, ISN acquisition, outcome
@@ -619,10 +693,10 @@ Rows marked ↦ were re-derived this revision and are given in **PE VA**.
 
 | What | Where |
 |---|---|
-| dispatch rows {fn@+0, name@+8} | `0x1063a0`-`0x106900` (name pointers are tail-shared) |
+| dispatch table {name@+0, fn@+8} ↦ | PE `0x1062d8`, 100×16 B records; registered by the loop at `0x9d994` (`bl 0x9dcec`); name pointers are tail-shared |
 | handler cluster / CmdFlashing | `0xa3000`-`0xa9000`; `0xab808` |
-| `oem asus-unlock` (cmd_oem_auth_hash setter) | entry `0xa3fc4` (row fn `0xa3fd4`) |
-| `oem get-hwid` (token-verify driver) | entry `0xa45bc` (row fn `0xa45cc`); token prints `0xa3714`, `0xa4734`, `0xa48cc` |
+| `oem asus-unlock` handler ↦ | PE `0xa484c` (token-auth flow); `oem asus-lock` `0xa45cc`; `oem asusfwck-dvp-info` `0xa3fd4` |
+| `oem get-hwid` (token-verify driver) ↦ | PE `0xa5cf8`; token prints `0xa3714`, `0xa4734`, `0xa48cc` |
 | `verify_RD_unlock` / RD token strings | `0xaf51c`; success print `0xaf7cc` |
 | is_unlock ↦ | PE VA `0x2d090` (frame 0x1d0, arg @`[sp,0x84]`); ISN identity `0x1a010`+`0x21ee0`; token `0x2c670`; verify `0x471c0`→`0x46d80`→`0x46010` |
 | read_asuskey (token) ↦ | PE VA `0x2c670`; backend volume reader PE VA `0x11010` (LocateHandleBuffer on gEfiSimpleFileSystemProtocol); namespace GUID `30f09946…` @PE `0x103e40` |
