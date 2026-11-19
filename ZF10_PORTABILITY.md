@@ -332,6 +332,13 @@ addresses in this paragraph are `[0xC8]`-module offsets = PE VA − 0x10):
 - Other ZF8-eq names: `oem hash_` (row `0xa5b30`) is a plain
   **state dumper** (prints `===`, `W_L/W_H`), not an auth-hash successor.
 
+> **Correction (§5.8).** The command-table row addresses quoted in this
+> section were read with the table parsed as `{fn,name}`; the table is
+> actually `{name,fn}`, so each handler above is really the command named on
+> the *previous* row. Corrected: `oem asus-unlock` = `0xa484c`,
+> `oem get-hwid` = `0xa5cf8`, `oem asusfwck-dvp-info` = `0xa3fd4`. The
+> RSA/token analysis below is unaffected (it follows `is_unlock`/`RsaVerify`).
+
 **[I]** Reconstruction: the ZF10 unlock flow is an ASUS-issued token for
 this device's ISN (flashed via `fastboot flash asuskey2 …` and read back
 by `read_asuskey`), then a trigger (`oem get-hwid` / `flashing unlock`) →
@@ -468,7 +475,119 @@ Locate sites as A14 `.65` (`0x46efc`/`0x4641c`; records `0x120738`/
 **Verdict: the AsusUnlock e = 3 key is not exploitable via
 `SecRSAVerifySig`. The last local-unlock avenue is closed.**
 
-### 5.8 Next steps
+### 5.8 The unlock-state store, the command map, and every state writer
+
+Coordinates are **PE VAs** of the `.52` `linuxloader10.efi`. This closes the
+"unlock-state store" avenue (the EDL question left open in §5.5) and
+enumerates every code path that can set unlock state. **[F]** unless noted.
+
+**The device-state mirror.** Device state is a 0xec8-byte blob at `0x2b3130`
+(reached as `[0x2b3000+0x130]`). Byte fields, verified through the
+getter/setter pairs:
+
+| off | meaning | getter | setter |
+|---|---|---|---|
+| `+0xd` | unlock | `0x18830` | `0x19070` |
+| `+0xe` | unlock-critical | `0x18880` | `0x191e0` |
+| `+0xea2` | authorization flag A | `0x1ae10` | `0x1af00` |
+| `+0xea3` | authorization flag B | `0x1ae60` | — |
+
+All persistent state I/O goes through `0x12480(op, buf, 0xec8)` → the
+VerifiedBoot protocol (`8E5EFF91`), which on a fused device is the keymaster
+TA (§5.7). The `0x19070`/`0x191e0` setters read the current value first and
+write only on change.
+
+**Why the EDL forgery does not work.** The plain-text INI `uefiplat.cfg` (FFS
+file `DDE58710-41CD-4306-DBFB-3FA90BB1D2DD`, at `0x47000`, 0x1ff4 B, ASCII)
+is embedded in the **`uefi` partition** and carries `SecurityFlag = 0xC4` in
+every build inspected (`.52`, A14/A15 `.65`, A15 `.109`). VerifiedBootDxe
+parses it via UefiConfigLib and sign-extends the byte (`sxtb`): `0xC4` is
+negative → bit31 set → **state I/O is routed to the keymaster TA**. Clearing
+the flag is what would let state I/O fall back to the plain `devinfo`
+partition, whose unlock byte EDL *could* forge — so clearing it is the whole
+attack. It is blocked because the **`uefi` partition is itself a signed
+container**: its ELF declares a type-2 segment (`0x29d000`, 0xf38 B) holding
+an ASUS X.509 chain (issuer `AI2302` / `ASUSTek COMPUTER INC.` / `FW R&D`,
+validity 2023→2043) plus ASN.1 signature structures — the same
+signed-container shape as `abl`. vbmeta has **no** `uefi` descriptor; the
+partition is anchored by this embedded chain instead. An EDL rewrite of
+`uefiplat.cfg` therefore breaks the `uefi` signature. **⇒ closed.**
+
+**The fastboot command table (and a correction to §5.5).** The dispatch table
+at PE `0x1062e8` is an array of `{const char* name; fn}` records
+(name@+0, fn@+8). §5.5 read the same table as `{fn,name}`, so it labelled each
+handler with the *next* command's name. Corrected map for the unlock surface
+(behaviour-confirmed):
+
+| command | PE VA | behaviour check |
+|---|---|---|
+| `flashing get_unlock_ability` | `0xa1d6c` | prints `get_unlock_ability: %d` |
+| `flashing unlock` | `0xa1dc4` | sets `+0xd=1`; prints `Device already : unlocked!` |
+| `flashing lock` | `0xa1e70` | clears `+0xd`; prints `Device already : locked!` |
+| `flashing unlock_critical` | `0xa1f24` | sets `+0xe=1` |
+| `flashing lock_critical` | `0xa1fd0` | clears `+0xe` |
+| `oem asus-lock` | `0xa45cc` | clears `+0xd` |
+| `oem asus-unlock` | `0xa484c` | token-auth flow |
+| `oem asus-wm-unlock` | `0xa4a40` | prints `Device is already watermask unlocked!` |
+| `oem xts-unlock` | `0xab818` | prints `Device is already xts unlocked!` |
+| `oem get-hwid` | `0xa5cf8` | token-verify driver |
+| `oem asusfwck` | `0xa3ba4` | — |
+| `oem asusfwck-dvp-info` | `0xa3fd4` | — |
+
+The substantive §5.5/§5.6 verdict does not depend on these labels — it came
+from the `is_unlock`/`RsaVerify`/`SecRSAVerifySig` chain. The corrected map
+does relocate §5.5's handlers: `oem asus-unlock` is `0xa484c`, `oem
+get-hwid` is `0xa5cf8` (not `0xa45bc`/`0xa3fc4`).
+
+**The complete set of unlock-state writers.** The direct callers of the
+setters are a closed set — every path funnels through `0x18d30` →
+`0x19070`/`0x191e0`, or one of two `w0`-typed stubs (`0xac958` = set,
+`0xac5f8` = clear):
+
+| site | handler (PE VA) | effect |
+|---|---|---|
+| `0x81fd0` | FFBM/qmmi applier `0x81de0` | unlock / critical from table `0x2b1840` |
+| `0xe1368` | device-unlock worker (`is_unlock(0)`-gated) | `+0xd=1` |
+| `0xa1e1c` | `flashing unlock` `0xa1dc4` | `+0xd=1` |
+| `0xa1eac` | `flashing lock` `0xa1e70` | `+0xd=0` |
+| `0xa1f7c` | `flashing unlock_critical` `0xa1f24` | `+0xe=1` |
+| `0xa200c` | `flashing lock_critical` `0xa1fd0` | `+0xe=0` |
+| `0xaba30` | `oem xts-unlock` `0xab818` | `+0xd=1` (after token verify) |
+| `0xa4710` | `oem asus-lock` `0xa45cc` | `+0xd=0` |
+| `0xa799c`/`0xa79a4` | `oem asus-csc_lk` `0xa797c` | `+0xd=0` / `+0xe=0` |
+
+**The FFBM/qmmi factory path cannot run on a ZF10.** The applier `0x81de0`
+(called from the 12-case `ffbm-*`/`qmmi` dispatcher `0x52180`, case 2)
+applies records `{unlock=1, unlock_critical=1, unlock=0, unlock_critical=0}`
+from table `0x2b1840` — with **no token check in the apply step itself**. It
+is reached only when `0x154c0() == 2`, and `0x154c0` classifies the **boot
+storage device** by string compare against `"UFS"`(→1) / `"EMMC"`(→0) /
+`"NAND"`(→2) (strings `0xf1501`/`0xf992c`/`0xf3536`). The ZF10 boots from
+UFS → `1` → the factory dispatcher never runs. That is why an unlock setter
+sits in an inert factory path.
+
+**Plain `flashing unlock` is not tokenless.** `0xa1dc4` sets `+0xd=1`
+*unless* `vb_state != 0 && +0xea2 == 0 && +0xea3 == 0`, where `vb_state` comes
+from a VerifiedBoot-protocol query `0x137d0` (Locate `8E5EFF91`, iface slot
+`+0x38`; prints `Unable to locate VB protocol`) and the flags `+0xea2`/`+0xea3`
+are produced by the ASUS token flows. On a fused unit (`vb_state != 0`, flags
+clear) the command refuses.
+
+**`oem xts-unlock` is certificate-anchored too.** `0xab818` calls `0xaf530`,
+which reads a token and references an embedded DER X.509 (`0x2b2419`,
+SEQUENCE length `0x3d1`) before it will set the xts flag (`0x1af00`) and then
+`+0xd=1`. So it is a second certificate-anchored route, **not** a tokenless
+one. *(**[I]** that `0xaf530` cryptographically verifies a signature over the
+token — it does not call the ABL `SecRSAVerifySig` chain but parses its own
+embedded cert.)*
+
+**Open threads for live (GhostLock) validation [I].** (a) the byte semantics
+of `vb_state` (VB method `+0x38`) and of `+0xea2`/`+0xea3`; (b) the token
+byte-layout that `0xaf530`/`is_unlock` verify; (c) the runtime value of
+`SecurityFlag`. None is expected to change the verdict; each is a concrete
+dump target.
+
+### 5.9 Next steps
 
 The decisive question is answered (§5.6/§5.7): there is no local weakness
 to weaponise. What remains is optional confirmation, not a path to unlock:
@@ -482,10 +601,14 @@ to weaponise. What remains is optional confirmation, not a path to unlock:
 2. **`.52 → .65` wiring diff** — ✅ done (§5.7): the A15 `.65` `uefi`
    partition was recovered by CDN range-fetch and its verifier modules are
    byte-identical to `.52`. No re-download needed.
-3. **Remaining ZF10 ABL corners** (none plausibly change the verdict): the
-   `flashing unlock` → DevInfo write path, the RD/WM/xts token helpers
-   (`verify_RD_unlock`, WaterMask), and the two `.data` X.509s (CN=Timo).
-4. **Live validation** only if a candidate ever appears; none does.
+3. **Remaining ZF10 ABL corners** — ✅ done (§5.8): the `flashing unlock`
+   → DevInfo write path, the command-table map, every unlock-state writer,
+   the RD/WM/xts token helpers and the FFBM factory path were all resolved;
+   none is a tokenless route. The `.data` X.509s (CN=Timo) are the anchors
+   of the `0xaf530` token verifier.
+4. **Live validation** of the open `[I]` items in §5.8 (`vb_state` /
+   `+0xea2`/`+0xea3` semantics, runtime `SecurityFlag`) via GhostLock dumps,
+   only if scheduled; no on-device candidate unlock path exists.
 
 ---
 
@@ -514,6 +637,12 @@ Rows marked ↦ were re-derived this revision and are given in **PE VA**.
 | .data X.509s (ASUS CN=Timo etc.) | `0x2b2412`, `0x2b27ea` (A13; A14 +0x10) |
 | auth globals page | `0x2cb000+0xed0..0xedf` (asus-unlock stores its arg ptr at +0xed0) |
 | fastboot flash-subdispatch strings | `flashing unlock` `0xff567`(ctx) — xrefs `0x9c49c/0x9c4b8`; `unlock_critical` `0xe8b4d` |
+| fastboot command table ↦ | PE `0x1062e8`; records `{name@+0, fn@+8}`; e.g. `flashing unlock`→`0xa1dc4`, `oem asus-unlock`→`0xa484c`, `oem xts-unlock`→`0xab818` |
+| device-state mirror ↦ | PE `0x2b3130` (0xec8 B): `+0xd` unlock, `+0xe` unlock-critical, `+0xea2`/`+0xea3` auth flags; I/O via `0x12480` |
+| `uefiplat.cfg` (FFS `DDE58710-…`) | `uefi` partition @`0x47000` (0x1ff4 B ASCII); `SecurityFlag = 0xC4` in `.52`/`.65`/`.109`; provider = VerifiedBootDxe via UefiConfigLib |
+| `uefi`-partition signature block | ELF type-2 segment @`0x29d000` (0xf38 B): ASUS X.509 chain (`AI2302`/`FW R&D`, 2023→2043) + ASN.1 sigs |
+| VB-state gate ↦ | PE `0x137d0` (Locate `8E5EFF91`, iface `+0x38`) — gates `flashing unlock` |
+| FFBM factory applier ↦ | PE `0x81de0` / dispatcher `0x52180`; gate `0x154c0()==2` ⇒ NAND boot device |
 
 ## Appendix B — ZF8 reference anchors (for diffing)
 
