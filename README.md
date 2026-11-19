@@ -205,14 +205,14 @@ Hand the following to your model (all in this repo):
 4. `work/unlock.py` — the end-to-end tool
 5. `work/abl_linuxloader.efi` — the actual bootloader binary
 
-A note on prior review: **this work was already independently reviewed by a
-second LLM** before publication (Nov 2026). That review found real bugs —
-including a persistence check that could never fail and a session-ordering
-flaw in the tool — and **every finding was applied and is recorded in handoff
-§14**. The review transcript itself is not published; §14 summarizes the
-findings and fixes. Your review can use it as a benchmark: if you find
-issues §14 doesn't already list, or disagree with one of its fixes, that's
-a signal worth reporting in an issue.
+A note on prior review: the primary research here was performed with
+**GLM 5.3**, and the work was independently reviewed before
+publication (Nov 2026) by a second model, **DeepSeek V4.1 Flash**. That
+review found real bugs — including a persistence check that could never
+fail and a session-ordering flaw in the tool — and **every finding was
+applied and is recorded in handoff §14**. Your review can use it as a
+benchmark: if you find issues §14 doesn't already list, or disagree with
+one of its fixes, that's a signal worth reporting in an issue.
 
 A protocol that resists look-ahead bias — ask the model to commit before it
 sees the answers:
@@ -300,5 +300,5 @@ LICENSE file.
   this deep dive.
 - The LineageOS project (`sake` device maintainers) for making the point of
   the exercise worth reaching.
-- This repo's research was independently reviewed by a second LLM (findings
-  summarized in handoff §14); all of its findings were applied.
+- Model credits: primary research with **GLM 5.3**; independent
+  peer review by **DeepSeek V4.1 Flash** (findings summarized in handoff §14).

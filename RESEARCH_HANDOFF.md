@@ -2,6 +2,8 @@
 
 **Date:** 2026-11-19
 **Author:** field notes from a live device session
+**Primary model:** GLM 5.3 — research, reverse-engineering, tooling, live run.
+**Secondary model:** DeepSeek V4.1 Flash — independent peer review (§14).
 **Purpose:** hand off everything learned to another model/engineer so research can continue
 without repeating the work. Facts are marked; inferences are marked **[inference]**.
 **Caution:** §12 publishes factory unlock keys and the complete working unlock sequence
@@ -741,8 +743,7 @@ Cautions going forward:
 
 ## 14. Peer review (Nov 19 2026)
 
-An independent second LLM reviewed §1–§13 and `work/*` (review transcript
-withheld; this section is the durable record of it).
+An independent second LLM (DeepSeek V4.1 Flash) reviewed §1–§13 and `work/*`.
 Findings accepted in full and applied:
 
 - `work/unlock.py`: 2.1 persistence-check substring bug (`"unlocked" in "rd_unlocked:…"`
