@@ -16,7 +16,8 @@ one candidate weakness (low exponent + sloppy padding) is **disproven by
 byte-level audit** of the live verifier (§5.7): strict encode-then-compare,
 full deterministic 0xFF PKCS#1 v1.5 padding, full-buffer memcmp. **No
 local-unlock avenue survives**; unlocking requires a token signed with
-ASUS's private key (§5.6).
+ASUS's private key (§5.6). Confirmed unchanged in the latest A15 `.65`
+build — its verifier modules are byte-identical to `.52` (§5.7).
 
 Notation: **[F]** = fact verified against binaries; **[I]** = inference.
 Coordinates: from §5.5 onward, addresses are **PE VAs** of
@@ -88,7 +89,7 @@ confirms).
    unlock gate actually verifies, byte-prove it.
 5. **Live-device validation** — the remaining gate for any on-device claim;
    no ZF10 attached so far, and no candidate survives to validate (§5.6).
-6. **XBL unpack + `SecRSAVerifySig` padding audit** — ✅ done (§5.7),
+6. **DXE unpack + `SecRSAVerifySig` padding audit** — ✅ done (§5.7),
    decisive: padding is strict, so the e = 3 forgery avenue is closed.
 
 ---
@@ -355,13 +356,15 @@ of no free ZF10 unlock.
 
 ### 5.7 XBL DXE core: protocol providers and the `SecRSAVerifySig` padding audit
 
-**[F]** The four GUIDs are served by DXE drivers that live in XBL, not in
-the ABL. Both the ZF10 A13 `.52` XBL and — as the control — the ZF8 XBL
-were unpacked (`xbl` ELF → outer FV → **gzip**-wrapped GUID-defined
-section files; *not* LZMA), and the protocol-installation graph was read
-from `InstallMultipleProtocolInterfaces` sites (a `ldr xN,[gBS+0x148];
-br xN` tail-thunk pattern — an earlier census missed these). Provider map
-(identical for ZF10 `.52` and ZF8):
+**[F]** The four GUIDs are serviced by DXE drivers in the platform's DXE
+firmware volumes — for the ZF10 the **`uefi` partition** (outer FV
+`8C8CE578-…`, driver FVs wrapped as GUID-defined **gzip** sections; *not*
+LZMA), and for the ZF8 `.296` control the equivalent FVs sit inside its
+xbl image. The ZF10 `.52` and A15 `.65` uefi partitions and the ZF8 image
+were all unpacked, and the protocol-installation graph was read from
+`InstallMultipleProtocolInterfaces` sites (a `ldr xN,[gBS+0x148]; br xN`
+tail-thunk pattern — an earlier census missed these). Provider map
+(identical for ZF10 `.52`/`.65` and ZF8):
 
 | GUID | provider | iface slots | role |
 |---|---|---|---|
@@ -424,17 +427,18 @@ unconditionally at `0x46528` and loaded into `w2` for the iface+0x10 call
 at `0x4658c`; the digest-comparison branch (fn 0x19f8) is unreachable from
 the ABL.
 
-**`.65` builds [F/I].** The A14 `.65` ABL reproduces the `.52` chain:
-structurally identical, differing only in shifted offsets and a relocated
-gBS global (`+0xa8`, was `+0x98`). The keytype constant
-`mov w8,#3; str w8,[sp,#0x24]` sits at `0x46e88` (+0xB0 from `.52`);
-Locate ASN1X509 @`0x46efc` (record @`0x120968`) and Locate SecRSA
-@`0x4641c` (record @`0x120978`; the two records are consecutive 16-byte
-entries, as in `.52`). The A14 `.65` XBL body is an MBN ELF32 container
-whose DXE FVs are **not** recoverable with the current recipe (no raw
-`_FVH`, no gzip/xz/LZMA stream), and the A15 `.65` `uefi` ops lie past the
-truncated OTA (§5.8) — so for `.65` the verifier strength is *inferred*
-from the unchanged ABL chain plus the shared XBL lineage, not re-decompiled.
+**`.65` builds [F].** The A15 `.65` `uefi` partition was recovered by
+HTTP-`Range`-fetching only the three `uefi` op blobs from the ASUS CDN
+(zip bytes `0xd40f251a..0xd44c4dfe`, ~4 MB), XZ-decoding them and checking
+the manifest sha256 (`7a0a75b1…fa41a`, 4,333,568 bytes) — so the truncated
+local download is no longer a blocker. Carving it the same way yields
+`SecRSADxe` and `ASN1X509Dxe` **byte-identical to `.52`** (module sha256
+`5b5b6097…` / `bccd2250…`, both found verbatim in the `.65` FV), i.e. the
+strict verifier (0x1670/0x1840) is unchanged. The A14 `.65` ABL likewise
+reproduces the `.52` chain (keytype constant @`0x46e88`; Locate ASN1X509
+@`0x46efc` → record `0x120968`; Locate SecRSA @`0x4641c` → record
+`0x120978`; gBS via global `+0xa8`, was `+0x98`). The verdict therefore
+holds for every inspected build, not by inference.
 
 **Verdict: the AsusUnlock e = 3 key is not exploitable via
 `SecRSAVerifySig`. The last local-unlock avenue is closed.**
@@ -448,10 +452,9 @@ to weaponise. What remains is optional confirmation, not a path to unlock:
    dump, non-destructive via GhostLock remote dumps only) — would confirm
    the reconstruction (raw-mode PKCS#1 v1.5 signature over the ISN-derived
    plaintext) but cannot produce a forgery.
-2. **`.52 → .65` wiring diff** — blocked: the A15 `.65` OTA download is
-   truncated at ~3.0 GiB while the `uefi` partition ops start at
-   ~0xd40f251a, past EOF. Re-download the full 4.4 GB zip to compare
-   (expected: no semantic change).
+2. **`.52 → .65` wiring diff** — ✅ done (§5.7): the A15 `.65` `uefi`
+   partition was recovered by CDN range-fetch and its verifier modules are
+   byte-identical to `.52`. No re-download needed.
 3. **Remaining ZF10 ABL corners** (none plausibly change the verdict): the
    `flashing unlock` → DevInfo write path, the RD/WM/xts token helpers
    (`verify_RD_unlock`, WaterMask), and the two `.data` X.509s (CN=Timo).
