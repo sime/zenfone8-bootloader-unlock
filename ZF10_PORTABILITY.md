@@ -119,4 +119,30 @@ Expected verdicts by outcome:
 
 ## 5. Findings
 
-*(filled in as measurements complete — see git history of this file)*
+### 5.1 ZF10 A14 `.65` manifest recon (from a partial download — manifest is at payload head)
+
+- The A14 `.65` package is **incremental** against A13 `.101` (payload v2,
+  37 partitions, `old_partition_info` present on every entry).
+- **`abl` ships no new content in A14 `.65`**: one degenerate `ZERO` op, **no
+  `new_partition_info`/hash**. Same for `xbl`, `xbl_config`, `tz`, `aop`,
+  `aop_config`, `devcfg`, `keymaster`, `uefisecapp`, `hyp`, `shrm`, `cpucp`,
+  `qupfw`, `multiimgoem`, `featenabler`, `vbmeta`(system), `uefi`,
+  `xbl_ramdump`. Partitions that did change (`boot`, `system`, `vendor`,
+  `xrom`, `modem`, …) show real `REPLACE_BZ`/diff ops.
+- Consequence: the *first-generation* ZF10 ABL (shipped at launch on A13)
+  was **carried forward unchanged** through `.52` → `.101` → A14 `.65`. The
+  A13 `.52` full package should therefore contain that launch-generation ABL,
+  and the A14 `.65` package is useless as an ABL source (deleted locally).
+- ZF10 partition set (vs ZF8): adds `uefi`, `aop_config`, `xbl_ramdump`,
+  `init_boot`, `system_dlkm`, `vendor_dlkm`, `recovery` — relevant later when
+  checking the ZF10 ABL's critical-partition list (the ZF8 `flash asuskey2`
+  special-case lives next to that list).
+
+### 5.2 Tooling notes
+
+- ASUS OTA payload headers are **big-endian** v2 (`CrAU`, u64 BE manifest
+  size, u32 BE signature size — verified byte-for-byte against the ZF8 `.332`
+  payload that `payload-dumper-go` accepts).
+- `work/payload_manifest.py` (new) parses partitions/op types without a full
+  download; validated against ZF8 `.332` (matches payload-dumper-go's
+  source-required report for `abl`).
