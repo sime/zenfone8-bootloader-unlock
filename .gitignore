@@ -1,0 +1,27 @@
+# ASUS firmware packages & extracted large images — not redistributed
+raw/
+firmware/
+
+# ASUS applications — not redistributed
+*.apk
+
+# Logs and captures (may contain device identifiers)
+*.log
+logs/
+
+# Private mitmproxy CA — never publish (it is a live CA private key)
+mitmproxy-ca.*
+
+# Personal device identity (contains real IMEI + serial)
+device_identity_snapshot.md
+
+# RE intermediates — large, regenerable from abl_linuxloader.efi
+work/abl_payload.bin
+work/cmdflash.bin
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

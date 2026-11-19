@@ -1,0 +1,58 @@
+MIT License
+
+Copyright (c) 2026 Simon Males
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+THIRD-PARTY FIRMWARE FILES — EXCEPTION TO THE ABOVE LICENSE
+-------------------------------------------------------------------------------
+
+The MIT grant above applies only to the original work of this repository's
+author: the research notes, the reverse-engineering write-ups, and the tools
+written for this project (`work/asusauth.py`, `work/emu.py`, `work/disasm.py`,
+`work/unlock.py`, `unlock_mitm_addon.py`, `mega_dl.py`, and documentation).
+
+This repository also contains, for research, verification and interoperability
+purposes only, a small number of files extracted from original ASUS firmware
+("Third-Party Firmware Files"):
+
+  - work/abl_linuxloader.efi   — the ABL bootloader image (PE32+ ARM64)
+                                 extracted from the ASUS
+                                 "31.1010.0410.61" (Android 12) RAW firmware
+                                 package for the ZenFone 8 (I006D).
+  - work/asus_bl_cert.der      — the ASUS unlock certificate embedded in ABL.
+  - scripts/*.sh                — the ASUS flash scripts shipped inside the
+                                 same RAW firmware package.
+
+NO LICENSE IS GRANTED IN THESE THIRD-PARTY FIRMWARE FILES. All rights in them
+belong to ASUSTeK Computer Inc. (and, where applicable, their other original
+rightsholders). They are reproduced here solely to make the published research
+independently verifiable, and to allow the unlock tool to be tested against
+the exact bootloader image it was engineered from.
+
+THIS REPOSITORY DOES NOT REDISTRIBUTE FIRMWARE PACKAGES. The complete RAW
+firmware images, OTA update packages, and ASUS applications (APKs) that this
+research was performed against are NOT included here. Obtain any firmware
+you need directly from ASUS or from the community archives linked in the
+README, and comply with the terms under which it is made available.
+
+If you are a rightsholder and object to the presence of any Third-Party
+Firmware File in this repository, open an issue or contact the author and it
+will be removed promptly.
