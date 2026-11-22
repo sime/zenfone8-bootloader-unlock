@@ -4,13 +4,21 @@ Unlock the ASUS ZenFone 8 bootloader **entirely on your own machine, with no
 ASUS server involved**, using a factory challenge–response protocol found
 inside the phone's own bootloader (ABL).
 
-Background: every documented "software" ZenFone 8 unlock method was the official
-Unlock app talking to an ASUS server. That server now refuses every request
-(`retCode 405 "NOT ALLOWED"`), and the app tricks around it (MITM, patched APK,
-downgrade games) are dead — evidence in [`RESEARCH_HANDOFF.md`](RESEARCH_HANDOFF.md)
-§4–§5. This repo is the result of reverse-engineering the A12 bootloader image
-itself, which turned out to contain a complete **local** factory authorization
-protocol:
+Background: every unlock method documented in the ZenFone 8 community threads
+was the official Unlock app talking to an ASUS server. That server now refuses
+every request (`retCode 405 "NOT ALLOWED"`), and the app tricks around it
+(MITM, patched APK, downgrade games) are dead — evidence in
+[`RESEARCH_HANDOFF.md`](RESEARCH_HANDOFF.md) §4–§5.
+
+**Prior art (found after this project completed):** the fastboot factory
+protocol itself (`oem gen-random` → `flash asuskey2` → `oem auth-hash`) was
+already public — [transaero21/asuskey2-bootloader-unlock](https://github.com/transaero21/asuskey2-bootloader-unlock)
+has carried a working response calculator (same algorithm, same key
+`"12345678"`) since June 2025, and its June 2026 device table covers the ZF8
+on the A13 `.296` ABL. This project was unaware of it and independently
+re-derived the protocol from the A12 bootloader image itself, with a full
+evidence chain — disassembly, an emulation oracle, and live on-device
+verification:
 
 ```
 fastboot oem gen-random   →  the bootloader gives you a 32-hex challenge
@@ -79,8 +87,9 @@ fastboot oem gen-random
 
 - If it prints `Random Num = <32 hex>` — the protocol is present in *your*
   bootloader. (Note: on anything newer than A12 `.61` this is untested by the
-  author — keys could differ. If `auth-hash` doesn't PASS, nothing is changed
-  and you can fall back to the downgrade.)
+  author — keys could differ. Third-party datapoint: transaero21's repo
+  reports the same key working on the A13 `.296` ABL. If `auth-hash` doesn't
+  PASS, nothing is changed and you can fall back to the downgrade.)
 - If it prints `UNKNOWN COMMAND` — downgrade to A12 `.61` first. The full
   locked-bootloader downgrade procedure that **worked** (ASUS's own signed
   RAW image set flashed over fastboot, despite a locked bootloader) is
@@ -299,6 +308,11 @@ LICENSE file.
 - The XDA ZenFone 8 community — the firmware OTA collection, and the
   documentation of the historical (now-dead) unlock-app path that motivated
   this deep dive.
+- transaero21 and contributors — [asuskey2-bootloader-unlock](https://github.com/transaero21/asuskey2-bootloader-unlock):
+  prior art for the fastboot factory protocol (public since June 2025, wider
+  device coverage). Their `hasher.py` and this repo's `work/asusauth.py` were
+  compared after the fact and produce byte-identical responses — two
+  independent implementations of the ABL algorithm in agreement.
 - The LineageOS project (`sake` device maintainers) for making the point of
   the exercise worth reaching.
 - Model credits: primary research with **GLM 5.3**; independent
